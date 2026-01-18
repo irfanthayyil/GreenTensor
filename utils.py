@@ -1,136 +1,170 @@
 import pandas as pd
 import numpy as np
+import random
 from datetime import datetime, timedelta
 
-def generate_mock_data(seed=None):
+# Regional profiles: (Base Carbon, Amplitude, Solar Potential)
+REGION_PROFILES = {
+    "Asia-Pacific (Mumbai)": {"base": 700, "amp": 150, "solar": 1.0, "currency": "₹", "mix_bias": "Coal"},
+    "US-East (N. Virginia)": {"base": 400, "amp": 100, "solar": 0.5, "currency": "$", "mix_bias": "Gas"},
+    "Europe (Stockholm)": {"base": 40, "amp": 20, "solar": 0.2, "currency": "€", "mix_bias": "Hydro"},
+}
+
+def get_regional_profile(region_name):
+    return REGION_PROFILES.get(region_name, REGION_PROFILES["Asia-Pacific (Mumbai)"])
+
+def generate_mock_data(region="Asia-Pacific (Mumbai)", seed=None):
     """
-    Generates mock data for Carbon Intensity and Price for the next 48 hours.
-    Carbon Intensity: Sine wave peaking at 7 PM (19:00), low around 2 AM (conceptually).
-    Price: Correlated with Carbon.
+    Generates mock data for Carbon Intensity, Price, and Grid Mix for 24h.
     """
     if seed is not None:
         np.random.seed(seed)
+        random.seed(seed)
         
+    profile = get_regional_profile(region)
+    base_carbon = profile["base"]
+    
+    # 24 Hour Snapshot
     now = datetime.now().replace(minute=0, second=0, microsecond=0)
-    hours = 48
+    hours = 24
     
-    # Generate timestamps
     timestamps = [now + timedelta(hours=i) for i in range(hours)]
-    
-    # Generate mock carbon intensity (gCO2/kWh)
-    # Target: Peak at 19:00, Lows roughly at 2 AM.
-    # We use a combined sine wave or just a shifted sine wave.
-    # Simple sine wave period 24h.
-    # Peak at 19. 
-    # phase shift calculation: 
-    # sin(2*pi*(t - shift)/24). Peak when argument is pi/2.
-    # 2*pi*(19 - shift)/24 = pi/2 => (19-shift)/12 = 1/2 => 19-shift = 6 => shift = 13.
-    
-    x = np.array([t.hour + (24 if i >= 24 else 0) for i, t in enumerate(timestamps)]) # continuous hours not perfect but okay for wave
-    # actually better to just use strict hour of day for pattern + some noise
-    
-    # We want a 48h series. 
-    # Let's create a continuous time variable t from 0 to 47
-    t = np.arange(hours)
-    
-    # Aligning phase so peak is at 7 PM (19:00) of the first day?
-    # The start time 'now' varies. We need to align with actual hour of day.
-    
-    current_hour = now.hour
-    # hour_offsets = (current_hour + t) % 24
-    
-    # To get peak at 19:00:
-    # sin(2pi/24 * (hour - 13))
-    
-    base_carbon = 400
-    amplitude = 150
     
     carbon_values = []
     prices = []
-    solar_values = []
+    grid_mixes = []
     
     for i in range(hours):
         dt = timestamps[i]
         h = dt.hour
         
-        # Sine wave calculation for Carbon
-        # Normalized -1 to 1
+        # Carbon Sine Wave
         wave = np.sin(2 * np.pi * (h - 13) / 24)
-        
-        # Add some randomness
         noise = np.random.normal(0, 20)
         
-        # Skew slightly to push low towards 2 AM if possible, but standard sine is fine.
-        val = base_carbon + (amplitude * wave) + noise
-        val = max(100, val) # clamp
-        
+        val = base_carbon + (profile["amp"] * wave) + noise
+        val = max(10, val)
         carbon_values.append(int(val))
         
-        # Price correlates with carbon (high demand = dirty peaker plants = expensive)
-        # Base price 5 INR, max 15 INR
-        price_noise = np.random.normal(0, 0.5)
-        price = 4 + (val / 50) + price_noise
-        prices.append(round(price, 2))
+        # Price
+        price = (val / 100) + 2 + np.random.normal(0, 0.5)
+        prices.append(round(max(0.5, price), 2))
         
-        # Solar Generation % (0 at night, peak at 12:00)
-        # Simple Model: Sine wave from 06:00 to 18:00
-        if 6 <= h <= 18:
-            # Peak at 12. 
-            # (h - 6) maps 6->0, 12->6, 18->12
-            # We want sin(0) to sin(pi).
-            # Argument = (h-6) * pi / 12
-            solar_arg = (h - 6) * np.pi / 12
-            solar_val = np.sin(solar_arg) * 100 # Peak at 100%
-            
-            # Add noise/weather
-            solar_noise = np.random.normal(0, 5)
-            solar_val = max(0, min(100, solar_val + solar_noise))
-        else:
-            solar_val = 0
-            
-        solar_values.append(int(solar_val))
+        # Grid Mix Generation (Simplistic)
+        # If High Carbon -> High Coal/Gas
+        # If Low Carbon -> High Solar/Hydro/Wind
         
+        if profile["mix_bias"] == "Coal":
+            # Coal dominant
+            coal = min(90, max(40, (val / 900) * 100))
+            solar = 0
+            if 6 <= h <= 18:
+                solar = max(0, 30 * np.sin((h-6)*np.pi/12))
+            
+            # Normalize remainder
+            rem = 100 - coal - solar
+            wind = rem * 0.3
+            gas = rem * 0.7
+            
+            grid_mix = {"Coal": int(coal), "Solar": int(solar), "Gas": int(gas), "Wind": int(wind)}
+            
+        elif profile["mix_bias"] == "Hydro":
+            hydro = 70 + np.random.randint(-5, 5)
+            wind = 20 + np.random.randint(-5, 5)
+            solar = 0
+            if 6 <= h <= 18:
+                 solar = 5
+            
+            rem = 100 - hydro - wind - solar
+            if rem < 0:
+                hydro += rem # adjust
+                rem = 0
+            
+            grid_mix = {"Hydro": int(hydro), "Wind": int(wind), "Solar": int(solar), "Nuclear": int(rem)}
+            
+        else: # Gas/Mix
+            gas = 40 + (val/500)*20
+            nuclear = 20
+            solar = 0
+            if 6 <= h <= 18:
+                solar = 20 * np.sin((h-6)*np.pi/12)
+            
+            rem = 100 - gas - nuclear - solar
+            wind = max(0, rem)
+            grid_mix = {"Gas": int(gas), "Nuclear": int(nuclear), "Solar": int(solar), "Wind": int(wind)}
+
+        grid_mixes.append(grid_mix)
+
     df = pd.DataFrame({
         "timestamp": timestamps,
         "carbon_intensity": carbon_values,
         "price": prices,
-        "solar_generation": solar_values
+        "grid_mix": grid_mixes
     })
     
     return df
 
-def find_optimal_window(df, duration_hours):
+def get_recommendation_logic(workload_type, inputs):
     """
-    Finds the window of 'duration_hours' with the lowest average carbon intensity.
-    Returns: start_time, avg_carbon, total_cost_estimate (heuristic)
+    Returns specific text based on workload type logic.
     """
-    if duration_hours > len(df):
-        return None
+    if workload_type == "GenAI Training":
+        gpu = inputs.get("GPU Type", "H100")
+        return f"💡 **Recommendation:** Shifting this **{gpu} cluster** to 'Europe (Stockholm)' reduces carbon by **92%**. Latency is irrelevant for training jobs. Shadow savings: **$4,500**."
     
-    rolling_carbon = df['carbon_intensity'].rolling(window=duration_hours).mean()
-    # rolling gives value at the end of the window. 
-    # We want to identify the start index.
-    # Shift backward to align with start time? 
-    # ACTUALLY, we can just iterate or use idxmin properly.
+    elif workload_type == "Inference Fleet":
+        return f"💡 **Recommendation:** Route via **Geo-DNS** to 'US-East' for off-peak hours? Saves **12% Cost**. Latency impact: +40ms (Within SLA)."
+        
+    elif workload_type == "HPC Simulation":
+        return f"💡 **Recommendation:** Your deadline is 48h away. **Pause & Resume** at 02:00 AM (Wind Peak) to improve **Net Efficiency Score** by +15."
+        
+    elif workload_type == "Enterprise ETL":
+        return f"💡 **Recommendation:** Shifting this ETL job to 'US-East-N.Virginia' saves **12% Cost** and **40% Carbon**. Latency impact: Negligible."
+        
+    return "💡 Optimizing parameters..."
+
+def generate_attribution_data():
+    """Generates the scorecard for FinOps view."""
+    data = {
+        "Team": ["Data Science (GenAI)", "Core Platform", "Data Engineering (ETL)", "R&D"],
+        "GPU Hours": [12500, 450, 3200, 800],
+        "Carbon Intensity Avg": [450, 210, 680, 120], # gCO2/kWh
+        "Net Efficiency Score": [72, 95, 45, 88] # 0-100
+    }
+    return pd.DataFrame(data)
+
+def generate_iso_data():
+    """Generates chart data for Compliance view."""
+    months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul"]
+    emissions = [500, 480, 460, 420, 400, 380, 350] # Trending down
+    target = [450, 440, 430, 420, 410, 400, 390] # Linear target
     
-    # Valid indices for start of window are 0 to len-duration
-    best_start_idx = -1
-    min_avg = float('inf')
-    
-    for i in range(len(df) - duration_hours + 1):
-        window = df.iloc[i : i+duration_hours]
-        avg = window['carbon_intensity'].mean()
-        if avg < min_avg:
-            min_avg = avg
-            best_start_idx = i
-            
-    if best_start_idx != -1:
-        best_window = df.iloc[best_start_idx : best_start_idx+duration_hours]
-        return {
-            "start_time": best_window.iloc[0]['timestamp'],
-            "end_time": best_window.iloc[-1]['timestamp'],
-            "avg_carbon": min_avg,
-            "avg_price": best_window['price'].mean(),
-            "window_df": best_window
-        }
-    return None
+    return pd.DataFrame({
+        "Month": months,
+        "Scope 2 Real": emissions,
+        "Net Zero Target": target
+    })
+
+def generate_audit_logs():
+    """Generates mock security logs for the Admin role."""
+    logs = pd.DataFrame({
+        "Timestamp": [datetime.now() - timedelta(minutes=i*15) for i in range(10)],
+        "User": ["alice@company.com", "bob@company.com", "system_cron", "charlie@company.com", "alice@company.com"] * 2,
+        "Action": ["Login", "Deploy Job", "Data Ingest", "API Key Access", "Logout"] * 2,
+        "IP Address": ["192.168.1.10", "192.168.1.12", "Localhost", "10.0.0.5", "192.168.1.10"] * 2,
+        "Status": ["Success", "Success", "Success", "Warn", "Success"] * 2
+    })
+    return logs
+
+def generate_system_logs():
+    """Generates a raw string of system logs."""
+    logs = [
+        f"[INFO] {datetime.now().strftime('%H:%M:%S')} - Core Engine: Initialized Grid Connection",
+        f"[INFO] {datetime.now().strftime('%H:%M:%S')} - Data Ingest: Successfully fetched MP-Zone data",
+        f"[WARN] {datetime.now().strftime('%H:%M:%S')} - Latency: 150ms detected in US-East region bridge",
+        f"[INFO] {datetime.now().strftime('%H:%M:%S')} - Optimizer: Found 2hr green window @ 03:00 AM",
+        f"[INFO] {datetime.now().strftime('%H:%M:%S')} - Scheduler: Queued 'LLaMA-7B-FineTune' for 03:00 AM",
+        f"[INFO] {datetime.now().strftime('%H:%M:%S')} - Security: Validating API Key for User-ID 8821",
+        f"[INFO] {datetime.now().strftime('%H:%M:%S')} - Compliance: Scope-2 Report Generated",
+    ]
+    return "\n".join(logs)
