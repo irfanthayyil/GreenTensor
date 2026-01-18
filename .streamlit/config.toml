@@ -1,0 +1,11 @@
+[theme]
+primaryColor = "#00FF00"  # Neon Green
+backgroundColor = "#0E1117" # Dark Grey/Black
+secondaryBackgroundColor = "#262730" # Lighter Grey for sidebars
+textColor = "#FAFAFA"
+font = "sans serif"
+
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
